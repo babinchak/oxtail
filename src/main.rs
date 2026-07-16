@@ -1,18 +1,23 @@
 mod app;
+mod config;
 mod detail;
+mod format;
 mod reader;
 mod ui;
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use crate::app::App;
+use crate::app::{App, LogLine};
+use crate::config::RuleSet;
+use crate::format::Template;
 
 /// A tail for NDJSON logs with a friendly TUI (plain text works too).
 #[derive(Parser)]
@@ -32,20 +37,85 @@ struct Args {
     /// Max lines kept in memory; oldest scroll off past this.
     #[arg(long, default_value_t = 50_000)]
     buffer: usize,
+
+    /// One-off format template for every JSON line,
+    /// e.g. "{created_at} {type} {repo.name}". Overrides --config.
+    #[arg(long, value_name = "TEMPLATE")]
+    format: Option<String>,
+
+    /// TOML display-rules file (default: ./oxtail.toml when present).
+    /// Edits are live-reloaded while the TUI runs.
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Print N formatted lines to stdout and exit — no TUI. Lets scripts
+    /// and AI agents see exactly what a config produces.
+    #[arg(long, value_name = "N")]
+    render: Option<usize>,
+
+    /// Validate the config (or --format template) and exit.
+    #[arg(long)]
+    check: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    let config_path = args.config.clone().or_else(|| {
+        let default = PathBuf::from("oxtail.toml");
+        default.exists().then_some(default)
+    });
+
+    let (rules, config_name) = if let Some(template) = &args.format {
+        let t = Template::parse(template).map_err(|e| anyhow!("--format: {e}"))?;
+        (RuleSet::from_template(t), Some("--format".to_string()))
+    } else if let Some(path) = &config_path {
+        let rules = config::load(path).map_err(|e| anyhow!("config error: {e}"))?;
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |f| f.to_string_lossy().into_owned(),
+        );
+        (rules, Some(name))
+    } else {
+        (RuleSet::default(), None)
+    };
+
+    if args.check {
+        match &config_name {
+            Some(name) => println!("{name}: ok"),
+            None => bail!("nothing to check: no --config, --format, or ./oxtail.toml"),
+        }
+        return Ok(());
+    }
+
     let source = args
         .file
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "stdin".into());
     let rx = reader::spawn(args.file, args.follow, args.rate);
+
+    // Headless mode: print formatted lines and exit.
+    if let Some(n) = args.render {
+        for _ in 0..n {
+            let Ok(raw) = rx.recv() else { break };
+            let line = LogLine::parse(raw);
+            println!("{}", ui::line_text(&ui::render_line(&line, &rules, false)));
+        }
+        return Ok(());
+    }
+
     let mut app = App::new(args.buffer.max(1), source);
+    app.rules = rules;
+    app.config_name = config_name;
+
+    // Live-reload the config while the TUI runs (not for --format).
+    let watch = config_path
+        .filter(|_| args.format.is_none())
+        .map(|p| (p.clone(), mtime(&p)));
 
     let terminal = ratatui::init();
-    let result = run(terminal, &mut app, rx);
+    let result = run(terminal, &mut app, rx, watch);
     ratatui::restore();
     result
 }
@@ -53,7 +123,12 @@ fn main() -> Result<()> {
 /// Max lines ingested per frame so a firehose can't starve the render loop.
 const DRAIN_PER_FRAME: usize = 5_000;
 
-fn run(mut terminal: DefaultTerminal, app: &mut App, rx: Receiver<String>) -> Result<()> {
+fn run(
+    mut terminal: DefaultTerminal,
+    app: &mut App,
+    rx: Receiver<String>,
+    mut watch: Option<(PathBuf, Option<SystemTime>)>,
+) -> Result<()> {
     while !app.quit {
         for _ in 0..DRAIN_PER_FRAME {
             match rx.try_recv() {
@@ -62,6 +137,20 @@ fn run(mut terminal: DefaultTerminal, app: &mut App, rx: Receiver<String>) -> Re
                 Err(TryRecvError::Disconnected) => {
                     app.ended = true;
                     break;
+                }
+            }
+        }
+
+        if let Some((path, seen)) = &mut watch {
+            let now = mtime(path);
+            if now != *seen {
+                *seen = now;
+                match config::load(path) {
+                    Ok(rules) => {
+                        app.rules = rules;
+                        app.config_error = None;
+                    }
+                    Err(e) => app.config_error = Some(e),
                 }
             }
         }
@@ -80,6 +169,10 @@ fn run(mut terminal: DefaultTerminal, app: &mut App, rx: Receiver<String>) -> Re
         }
     }
     Ok(())
+}
+
+fn mtime(path: &PathBuf) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
@@ -107,6 +200,7 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
         KeyCode::Enter => app.open_detail(),
+        KeyCode::Char('r') => app.raw_mode = !app.raw_mode,
         KeyCode::Up | KeyCode::Char('k') => app.scroll_up(1),
         KeyCode::Down | KeyCode::Char('j') => app.scroll_down(1),
         KeyCode::PageUp => app.scroll_up(page),

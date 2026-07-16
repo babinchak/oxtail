@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use serde_json::Value;
 
+use crate::config::RuleSet;
 use crate::detail::Detail;
 
 /// One log line: the raw text, plus its parsed form when it is NDJSON.
@@ -37,6 +38,14 @@ pub struct App {
     pub viewport_h: usize,
     /// Expanded view of one record, when open.
     pub detail: Option<Detail>,
+    /// Display rules from --format or the config file.
+    pub rules: RuleSet,
+    /// Show raw JSON even when rules exist (toggled with `r`).
+    pub raw_mode: bool,
+    /// Where the rules came from, for the status bar (file name or --format).
+    pub config_name: Option<String>,
+    /// Error from the last live config reload; the old rules stay active.
+    pub config_error: Option<String>,
     /// The input stream reached EOF (reader thread hung up).
     pub ended: bool,
     /// Display name of the input source for the status bar.
@@ -55,6 +64,10 @@ impl App {
             cursor: 0,
             viewport_h: 0,
             detail: None,
+            rules: RuleSet::default(),
+            raw_mode: false,
+            config_name: None,
+            config_error: None,
             ended: false,
             source,
             quit: false,

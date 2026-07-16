@@ -6,6 +6,7 @@ use ratatui::Frame;
 use serde_json::Value;
 
 use crate::app::{App, LogLine};
+use crate::config::RuleSet;
 
 /// Stop building spans for a single line past this many chars; the terminal
 /// truncates at the right edge anyway and GH Archive payloads can be huge.
@@ -30,7 +31,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .range(start..end)
         .enumerate()
         .map(|(off, l)| {
-            let line = render_line(l);
+            let line = render_line(l, &app.rules, app.raw_mode);
             if !app.follow && start + off == cursor_idx {
                 line.bg(Color::DarkGray)
             } else {
@@ -66,20 +67,36 @@ fn status_line(app: &App, start: usize, end: usize) -> Paragraph<'static> {
     if app.dropped > 0 {
         parts.push(Span::raw(format!(" (+{} scrolled off)", app.dropped)));
     }
+    if let Some(name) = &app.config_name {
+        let raw = if app.raw_mode { " (raw)" } else { "" };
+        parts.push(Span::raw(format!(" | fmt {name}{raw}")));
+    }
     if app.ended {
         parts.push(Span::styled(
             " | stream ended",
             Style::new().fg(Color::Red),
         ));
     }
+    if let Some(err) = &app.config_error {
+        parts.push(Span::styled(
+            format!(" | config error: {err}"),
+            Style::new().fg(Color::Red),
+        ));
+    }
     parts.push(Span::styled(
-        "  q quit  ↑/↓ move  ⏎ expand  f follow  g/G top/bottom",
+        "  q quit  ↑/↓ move  ⏎ expand  r raw  f follow  g/G top/bottom",
         Style::new().add_modifier(Modifier::DIM),
     ));
     Paragraph::new(Line::from(parts)).style(Style::new().bg(Color::DarkGray).fg(Color::White))
 }
 
-fn render_line(line: &LogLine) -> Line<'static> {
+pub fn render_line(line: &LogLine, rules: &RuleSet, raw: bool) -> Line<'static> {
+    if !raw
+        && let Some(v) = &line.json
+        && let Some(spans) = rules.format_line(v)
+    {
+        return Line::from(spans);
+    }
     match &line.json {
         Some(v) => {
             let mut spans = Vec::new();
@@ -89,6 +106,11 @@ fn render_line(line: &LogLine) -> Line<'static> {
         }
         None => Line::from(line.raw.clone()),
     }
+}
+
+/// Plain-text form of a rendered line, for headless --render output.
+pub fn line_text(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
 /// Colorized compact rendering of a JSON value: keys cyan, strings green,
