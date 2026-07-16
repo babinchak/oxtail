@@ -45,21 +45,27 @@ The config is live-reloaded while the TUI runs — edit rules in one window and
 watch the stream re-render in the other. See `examples/gharchive.toml` for a
 full ruleset covering every GH Archive event type.
 
-Headless helpers (also handy for AI agents writing configs for you):
+Headless subcommands (also handy for AI agents writing configs for you):
 
 ```sh
-oxtail file.ndjson --paths                           # summarize structure: paths, types, presence, shapes
-oxtail file.ndjson --config rules.toml --render 20   # print 20 formatted lines, no TUI
-oxtail --config rules.toml --check                   # validate config, exit code + errors
+oxtail paths file.ndjson                        # summarize structure: paths, types, presence, shapes
+oxtail render file.ndjson -c rules.toml -n 20   # print 20 formatted lines, no TUI
+oxtail check -c rules.toml                      # validate config, exit code + errors
 ```
 
 ## Let an AI write your config
 
-`skills/oxtail-format/SKILL.md` is an agent skill that teaches an AI
-assistant (e.g. Claude Code) the full loop: inspect your stream with
-`--paths`, write rules for every shape it finds, validate with `--check`,
-and prove the result with `--render`. Point your agent at it and ask for
-"a readable format for my logs".
+oxtail ships an agent skill that teaches an AI assistant (e.g. Claude Code)
+the full loop: inspect your stream with `paths`, write rules for every shape
+it finds, validate with `check`, and prove the result with `render`. The
+skill is bundled in the binary, so it always matches your version:
+
+```sh
+oxtail skill            # print the guide (source: skills/oxtail-format/SKILL.md)
+oxtail skill install    # install it for Claude Code (~/.claude/skills/)
+```
+
+Then ask your agent for "a readable format for my logs".
 
 ## Test data
 
