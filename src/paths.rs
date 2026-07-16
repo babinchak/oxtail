@@ -124,10 +124,8 @@ impl Accumulator {
                 track(&mut stat.values, s);
             }
             Value::Bool(b) => track(&mut stat.values, if *b { "true" } else { "false" }),
-            Value::Number(n) => {
-                if stat.example.is_none() {
-                    stat.example = Some(n.to_string());
-                }
+            Value::Number(n) if stat.example.is_none() => {
+                stat.example = Some(n.to_string());
             }
             _ => {}
         }

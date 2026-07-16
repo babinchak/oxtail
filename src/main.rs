@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
@@ -21,10 +21,21 @@ use crate::app::{App, LogLine};
 use crate::config::RuleSet;
 use crate::format::Template;
 
+/// The AI agent skill ships inside the binary so installed copies are
+/// self-describing and the docs can never drift from the features.
+const SKILL_MD: &str = include_str!("../skills/oxtail-format/SKILL.md");
+
 /// A tail for NDJSON logs with a friendly TUI (plain text works too).
 #[derive(Parser)]
-#[command(version, about)]
-struct Args {
+#[command(
+    version,
+    about,
+    after_help = "AI agents: run `oxtail skill` for the bundled guide to writing display-rule configs."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// File to read (.gz is decompressed on the fly). Reads stdin when omitted.
     file: Option<PathBuf>,
 
@@ -40,108 +51,180 @@ struct Args {
     #[arg(long, default_value_t = 50_000)]
     buffer: usize,
 
+    #[command(flatten)]
+    fmt: FormatArgs,
+}
+
+#[derive(Args)]
+struct FormatArgs {
     /// One-off format template for every JSON line,
     /// e.g. "{created_at} {type} {repo.name}". Overrides --config.
     #[arg(long, value_name = "TEMPLATE")]
     format: Option<String>,
 
     /// TOML display-rules file (default: ./oxtail.toml when present).
-    /// Edits are live-reloaded while the TUI runs.
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+}
 
-    /// Print N formatted lines to stdout and exit — no TUI. Lets scripts
-    /// and AI agents see exactly what a config produces.
-    #[arg(long, value_name = "N")]
-    render: Option<usize>,
-
-    /// Validate the config (or --format template) and exit.
-    #[arg(long)]
-    check: bool,
-
+#[derive(Subcommand)]
+enum Command {
+    /// Print formatted lines to stdout — no TUI. Lets scripts and AI agents
+    /// see exactly what a config produces.
+    Render {
+        /// File to read (.gz ok). Reads stdin when omitted.
+        file: Option<PathBuf>,
+        /// Stop after N input lines (default: read to the end).
+        #[arg(short = 'n', long, value_name = "N")]
+        lines: Option<usize>,
+        #[command(flatten)]
+        fmt: FormatArgs,
+    },
+    /// Validate a rules config (or --format template) and exit.
+    Check {
+        #[command(flatten)]
+        fmt: FormatArgs,
+    },
     /// Summarize the stream's JSON structure (paths, types, presence,
-    /// shapes) and exit — no TUI. Optionally limit to the first N lines.
-    /// Made for humans and AI agents about to write display rules.
-    #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "0")]
-    paths: Option<usize>,
+    /// shapes) — for humans and AI agents about to write display rules.
+    Paths {
+        /// File to read (.gz ok). Reads stdin when omitted.
+        file: Option<PathBuf>,
+        /// Stop after N input lines (default: read to the end).
+        #[arg(short = 'n', long, value_name = "N")]
+        lines: Option<usize>,
+    },
+    /// Print the bundled AI agent skill for writing display rules.
+    Skill {
+        #[command(subcommand)]
+        action: Option<SkillAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillAction {
+    /// Install the skill for Claude Code (~/.claude/skills/oxtail-format/).
+    Install,
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Command::Skill { action: None }) => {
+            let _ = io::stdout().write_all(SKILL_MD.as_bytes());
+            Ok(())
+        }
+        Some(Command::Skill {
+            action: Some(SkillAction::Install),
+        }) => install_skill(),
+        Some(Command::Check { fmt }) => {
+            let (_, name, _) = load_rules(&fmt)?;
+            match name {
+                Some(n) => {
+                    println!("{n}: ok");
+                    Ok(())
+                }
+                None => bail!("nothing to check: no --config, --format, or ./oxtail.toml"),
+            }
+        }
+        Some(Command::Paths { file, lines }) => run_paths(file, lines),
+        Some(Command::Render { file, lines, fmt }) => run_render(file, lines, &fmt),
+        None => run_tui(cli),
+    }
+}
 
-    let config_path = args.config.clone().or_else(|| {
+/// Resolve display rules from --format, --config, or ./oxtail.toml.
+/// Returns (rules, display name, config path to watch for live reload).
+fn load_rules(fmt: &FormatArgs) -> Result<(RuleSet, Option<String>, Option<PathBuf>)> {
+    if let Some(template) = &fmt.format {
+        let t = Template::parse(template).map_err(|e| anyhow!("--format: {e}"))?;
+        return Ok((RuleSet::from_template(t), Some("--format".into()), None));
+    }
+    let path = fmt.config.clone().or_else(|| {
         let default = PathBuf::from("oxtail.toml");
         default.exists().then_some(default)
     });
-
-    let (rules, config_name) = if let Some(template) = &args.format {
-        let t = Template::parse(template).map_err(|e| anyhow!("--format: {e}"))?;
-        (RuleSet::from_template(t), Some("--format".to_string()))
-    } else if let Some(path) = &config_path {
-        let rules = config::load(path).map_err(|e| anyhow!("config error: {e}"))?;
-        let name = path.file_name().map_or_else(
-            || path.display().to_string(),
-            |f| f.to_string_lossy().into_owned(),
-        );
-        (rules, Some(name))
-    } else {
-        (RuleSet::default(), None)
-    };
-
-    if args.check {
-        match &config_name {
-            Some(name) => println!("{name}: ok"),
-            None => bail!("nothing to check: no --config, --format, or ./oxtail.toml"),
+    match path {
+        Some(p) => {
+            let rules = config::load(&p).map_err(|e| anyhow!("config error: {e}"))?;
+            let name = p.file_name().map_or_else(
+                || p.display().to_string(),
+                |f| f.to_string_lossy().into_owned(),
+            );
+            Ok((rules, Some(name), Some(p)))
         }
-        return Ok(());
+        None => Ok((RuleSet::default(), None, None)),
     }
+}
 
-    let source = args
+fn run_render(file: Option<PathBuf>, lines: Option<usize>, fmt: &FormatArgs) -> Result<()> {
+    let (rules, _, _) = load_rules(fmt)?;
+    let rx = reader::spawn(file, false, None);
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    let mut seen = 0usize;
+    while lines.is_none_or(|n| seen < n) {
+        let Ok(raw) = rx.recv() else { break };
+        seen += 1;
+        let line = LogLine::parse(raw);
+        let text = ui::line_text(&ui::render_line(&line, &rules, false));
+        // A closed pipe (e.g. `| head`) just means we're done.
+        if writeln!(out, "{text}").is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn run_paths(file: Option<PathBuf>, lines: Option<usize>) -> Result<()> {
+    let rx = reader::spawn(file, false, None);
+    let mut acc = paths::Accumulator::default();
+    let mut seen = 0usize;
+    while lines.is_none_or(|n| seen < n) {
+        let Ok(raw) = rx.recv() else { break };
+        seen += 1;
+        let line = LogLine::parse(raw);
+        acc.add(&line.raw, line.json.as_ref());
+    }
+    // Tolerate a closed pipe (e.g. piped into `head`).
+    let _ = io::stdout().write_all(acc.report().as_bytes());
+    Ok(())
+}
+
+fn install_skill() -> Result<()> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| anyhow!("could not find home directory (USERPROFILE/HOME unset)"))?;
+    let dir = PathBuf::from(home)
+        .join(".claude")
+        .join("skills")
+        .join("oxtail-format");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("SKILL.md");
+    fs::write(&path, SKILL_MD)?;
+    println!("installed skill to {}", path.display());
+    Ok(())
+}
+
+fn run_tui(cli: Cli) -> Result<()> {
+    let (rules, config_name, watch_path) = load_rules(&cli.fmt)?;
+
+    let source = cli
         .file
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "stdin".into());
-    let rx = reader::spawn(args.file, args.follow, args.rate);
+    let rx = reader::spawn(cli.file, cli.follow, cli.rate);
 
-    // Headless mode: summarize structure and exit.
-    if let Some(limit) = args.paths {
-        let mut acc = paths::Accumulator::default();
-        let mut seen = 0usize;
-        while limit == 0 || seen < limit {
-            let Ok(raw) = rx.recv() else { break };
-            let line = LogLine::parse(raw);
-            acc.add(&line.raw, line.json.as_ref());
-            seen += 1;
-        }
-        // Tolerate a closed pipe (e.g. piped into `head`).
-        let _ = io::stdout().write_all(acc.report().as_bytes());
-        return Ok(());
-    }
-
-    // Headless mode: print formatted lines and exit.
-    if let Some(n) = args.render {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-        for _ in 0..n {
-            let Ok(raw) = rx.recv() else { break };
-            let line = LogLine::parse(raw);
-            let text = ui::line_text(&ui::render_line(&line, &rules, false));
-            // A closed pipe (e.g. `| head`) just means we're done.
-            if writeln!(out, "{text}").is_err() {
-                break;
-            }
-        }
-        return Ok(());
-    }
-
-    let mut app = App::new(args.buffer.max(1), source);
+    let mut app = App::new(cli.buffer.max(1), source);
     app.rules = rules;
     app.config_name = config_name;
 
-    // Live-reload the config while the TUI runs (not for --format).
-    let watch = config_path
-        .filter(|_| args.format.is_none())
-        .map(|p| (p.clone(), mtime(&p)));
+    // Live-reload the config while the TUI runs.
+    let watch = watch_path.map(|p| {
+        let seen = mtime(&p);
+        (p, seen)
+    });
 
     let terminal = ratatui::init();
     let result = run(terminal, &mut app, rx, watch);

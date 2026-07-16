@@ -9,7 +9,9 @@ oxtail is an NDJSON tail TUI. A rules config maps each JSON line to a short
 formatted line; the log itself stays machine-readable. Your job: inspect the
 user's stream, write a config, prove it works, hand it over.
 
-All commands below work headlessly — you never need the TUI.
+All commands below work headlessly — you never need the TUI. This guide is
+bundled in the binary: `oxtail skill` prints it, so it always matches the
+installed version's features.
 
 ## Workflow
 
@@ -17,12 +19,13 @@ All commands below work headlessly — you never need the TUI.
    misses rare event types):
 
    ```
-   oxtail <file> --paths 50000
+   oxtail paths <file>
    ```
 
-   (`N` = input lines to read; omit it to read the whole file. The output
-   can be hundreds of lines — read the shapes and the high-presence paths
-   first, and grep it when hunting for a specific field.)
+   (Reads the whole file; add `-n 50000` to stop after the first 50000
+   input lines. The output can be hundreds of lines — read the shapes and
+   the high-presence paths first, and grep it when hunting for a specific
+   field.)
 
    Find: (a) the **discriminant** — a string path at ~100% presence with few
    distinct values, reported like
@@ -42,18 +45,19 @@ All commands below work headlessly — you never need the TUI.
    format = "UNMATCHED {type}"
    ```
 
-3. **Validate**: `oxtail --config <file>.toml --check`. Fix and repeat until
+3. **Validate**: `oxtail check --config <file>.toml`. Fix and repeat until
    it prints `ok`. Error messages name the failing rule by number.
 
-4. **Preview**: `oxtail <file> --config <file>.toml --render 30` and read the
-   output like a human would: aligned? scannable? key info first?
-   (`--render N` reads N input lines and prints one line per record.)
+4. **Preview**: `oxtail render <file> --config <file>.toml -n 30` and read
+   the output like a human would: aligned? scannable? key info first?
+   (`render` prints one output line per input line; `-n` caps input lines,
+   omit it to render everything.)
 
 5. **Verify coverage of rare types** — the first 30 lines won't contain
    them:
 
    ```
-   oxtail <file> --config <file>.toml --render 999999 | grep UNMATCHED | sort | uniq -c
+   oxtail render <file> --config <file>.toml | grep UNMATCHED | sort | uniq -c
    ```
 
    Write rules for whatever appears (or deliberately leave it to the
@@ -90,7 +94,7 @@ subtype, match on a path+value that only that subtype has
 probe that shows which discriminant values a path co-occurs with:
 
 ```
-oxtail <file> --format "{type} {payload.ref_type}" --render 999999 | sort | uniq -c
+oxtail render <file> --format "{type} {payload.ref_type}" | sort | uniq -c
 ```
 
 **Templates**: `{a.b.c}` placeholders are dotted paths into the record;
