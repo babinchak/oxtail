@@ -3,6 +3,8 @@ name = "oxtail"
 version = "0.1.0"
 edition = "2024"
 description = "A tail for NDJSON logs with a friendly TUI (plain text works too)"
+license = "MIT"
+repository = "https://github.com/babinchak/oxtail"
 
 [dependencies]
 anyhow = "1"
