@@ -3,6 +3,22 @@
 A tail for NDJSON logs with a friendly TUI. Lines that parse as JSON objects
 get colorized structured rendering; anything else displays as plain text.
 
+## Install
+
+No Rust required — prebuilt binaries for Windows, macOS, and Linux:
+
+```powershell
+# Windows
+irm https://github.com/babinchak/oxtail/releases/latest/download/oxtail-installer.ps1 | iex
+```
+
+```sh
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/babinchak/oxtail/releases/latest/download/oxtail-installer.sh | sh
+```
+
+Or with Rust: `cargo install oxtail`
+
 ## Usage
 
 ```sh
