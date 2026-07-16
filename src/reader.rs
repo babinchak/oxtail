@@ -34,7 +34,15 @@ fn read_source(
         }
     });
     let mut sent_in_batch = 0u32;
+    let mut first = true;
     let mut send = |line: &str| -> bool {
+        // PowerShell pipes and many Windows editors prepend a UTF-8 BOM,
+        // which would make the first line unparseable as JSON.
+        let line = if std::mem::take(&mut first) {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
         let line = line.trim_end_matches(['\r', '\n']);
         if tx.send(line.to_string()).is_err() {
             return false; // UI quit; stop reading

@@ -7,7 +7,7 @@ mod reader;
 mod ui;
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, SystemTime};
@@ -157,7 +157,20 @@ fn load_rules(fmt: &FormatArgs) -> Result<(RuleSet, Option<String>, Option<PathB
     }
 }
 
+/// Reading stdin only makes sense when something is piped in. Without this
+/// guard, a bare invocation from a terminal blocks on keyboard "input" —
+/// and in the TUI the stdin reader even eats the keystrokes meant for it.
+fn require_input(file: &Option<PathBuf>) -> Result<()> {
+    if file.is_none() && io::stdin().is_terminal() {
+        bail!(
+            "no input: pass a file (oxtail app.ndjson) or pipe NDJSON in (my-app | oxtail)"
+        );
+    }
+    Ok(())
+}
+
 fn run_render(file: Option<PathBuf>, lines: Option<usize>, fmt: &FormatArgs) -> Result<()> {
+    require_input(&file)?;
     let (rules, _, _) = load_rules(fmt)?;
     let rx = reader::spawn(file, false, None);
     let stdout = io::stdout();
@@ -177,6 +190,7 @@ fn run_render(file: Option<PathBuf>, lines: Option<usize>, fmt: &FormatArgs) -> 
 }
 
 fn run_paths(file: Option<PathBuf>, lines: Option<usize>) -> Result<()> {
+    require_input(&file)?;
     let rx = reader::spawn(file, false, None);
     let mut acc = paths::Accumulator::default();
     let mut seen = 0usize;
@@ -207,6 +221,7 @@ fn install_skill() -> Result<()> {
 }
 
 fn run_tui(cli: Cli) -> Result<()> {
+    require_input(&cli.file)?;
     let (rules, config_name, watch_path) = load_rules(&cli.fmt)?;
 
     let source = cli
