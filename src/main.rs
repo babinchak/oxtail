@@ -2,10 +2,12 @@ mod app;
 mod config;
 mod detail;
 mod format;
+mod paths;
 mod reader;
 mod ui;
 
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, SystemTime};
@@ -56,6 +58,12 @@ struct Args {
     /// Validate the config (or --format template) and exit.
     #[arg(long)]
     check: bool,
+
+    /// Summarize the stream's JSON structure (paths, types, presence,
+    /// shapes) and exit — no TUI. Optionally limit to the first N lines.
+    /// Made for humans and AI agents about to write display rules.
+    #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "0")]
+    paths: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -95,12 +103,33 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| "stdin".into());
     let rx = reader::spawn(args.file, args.follow, args.rate);
 
+    // Headless mode: summarize structure and exit.
+    if let Some(limit) = args.paths {
+        let mut acc = paths::Accumulator::default();
+        let mut seen = 0usize;
+        while limit == 0 || seen < limit {
+            let Ok(raw) = rx.recv() else { break };
+            let line = LogLine::parse(raw);
+            acc.add(&line.raw, line.json.as_ref());
+            seen += 1;
+        }
+        // Tolerate a closed pipe (e.g. piped into `head`).
+        let _ = io::stdout().write_all(acc.report().as_bytes());
+        return Ok(());
+    }
+
     // Headless mode: print formatted lines and exit.
     if let Some(n) = args.render {
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
         for _ in 0..n {
             let Ok(raw) = rx.recv() else { break };
             let line = LogLine::parse(raw);
-            println!("{}", ui::line_text(&ui::render_line(&line, &rules, false)));
+            let text = ui::line_text(&ui::render_line(&line, &rules, false));
+            // A closed pipe (e.g. `| head`) just means we're done.
+            if writeln!(out, "{text}").is_err() {
+                break;
+            }
         }
         return Ok(());
     }
