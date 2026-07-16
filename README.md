@@ -48,9 +48,18 @@ full ruleset covering every GH Archive event type.
 Headless helpers (also handy for AI agents writing configs for you):
 
 ```sh
+oxtail file.ndjson --paths                           # summarize structure: paths, types, presence, shapes
 oxtail file.ndjson --config rules.toml --render 20   # print 20 formatted lines, no TUI
 oxtail --config rules.toml --check                   # validate config, exit code + errors
 ```
+
+## Let an AI write your config
+
+`skills/oxtail-format/SKILL.md` is an agent skill that teaches an AI
+assistant (e.g. Claude Code) the full loop: inspect your stream with
+`--paths`, write rules for every shape it finds, validate with `--check`,
+and prove the result with `--render`. Point your agent at it and ask for
+"a readable format for my logs".
 
 ## Test data
 
