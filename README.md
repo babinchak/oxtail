@@ -3,6 +3,8 @@
 A tail for NDJSON logs with a friendly TUI. Lines that parse as JSON objects
 get colorized structured rendering; anything else displays as plain text.
 
+![oxtail formatting a GH Archive event stream, then expanding one record to pretty-printed JSON](https://raw.githubusercontent.com/babinchak/oxtail/main/assets/demo.gif)
+
 ## Install
 
 No Rust required — prebuilt binaries for Windows, macOS, and Linux:
