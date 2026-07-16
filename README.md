@@ -13,10 +13,44 @@ cat app.log | oxtail             # read from stdin
 oxtail events.json.gz --rate 50  # replay at ~50 lines/sec (demo mode)
 ```
 
-Keys: `↑/↓/j/k` move · `PgUp/PgDn` page · `Enter` expand record (pretty-printed JSON) · `g` top · `G`/`f`/`End` follow newest · `q` quit.
+Keys: `↑/↓/j/k` move · `PgUp/PgDn` page · `Enter` expand record (pretty-printed JSON) · `r` toggle raw JSON · `g` top · `G`/`f`/`End` follow newest · `q` quit.
 
 Scrolling up pauses at your position while the stream keeps buffering;
 scrolling back to the bottom (or pressing `f`) resumes following.
+
+## Display rules
+
+Format noisy NDJSON into readable one-liners. Quick one-off:
+
+```sh
+oxtail app.ndjson --format "{ts} {level} {msg}"
+```
+
+Or a rules file (`--config rules.toml`, or `./oxtail.toml` picked up
+automatically). First matching rule formats the line; unmatched lines fall
+back to colorized raw JSON. `{a.b.c}` placeholders are dotted paths into the
+record (array indices are numeric: `{commits.0.sha}`).
+
+```toml
+[[rule]]
+when = { path = "type", equals = "PushEvent" }   # also: contains, exists
+format = "{created_at} PUSH {repo.name} by {actor.login}"
+color = "green"
+
+[fallback]
+format = "{created_at} {type} {repo.name}"
+```
+
+The config is live-reloaded while the TUI runs — edit rules in one window and
+watch the stream re-render in the other. See `examples/gharchive.toml` for a
+full ruleset covering every GH Archive event type.
+
+Headless helpers (also handy for AI agents writing configs for you):
+
+```sh
+oxtail file.ndjson --config rules.toml --render 20   # print 20 formatted lines, no TUI
+oxtail --config rules.toml --check                   # validate config, exit code + errors
+```
 
 ## Test data
 

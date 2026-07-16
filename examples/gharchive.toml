@@ -1,0 +1,78 @@
+# oxtail display rules for GH Archive event streams (https://www.gharchive.org/)
+# Try it:  oxtail fixtures/2015-01-01-15.json.gz --config examples/gharchive.toml --rate 50
+# Rules are checked top to bottom; first match formats the line.
+
+[[rule]]
+when = { path = "type", equals = "PushEvent" }
+format = "{created_at} PUSH    {repo.name} {payload.ref} ({payload.size} commits) by {actor.login}"
+color = "green"
+
+[[rule]]
+when = { path = "type", equals = "PullRequestEvent" }
+format = "{created_at} PR      {repo.name} #{payload.number} {payload.action}: {payload.pull_request.title} by {actor.login}"
+color = "magenta"
+
+[[rule]]
+when = { path = "type", equals = "PullRequestReviewCommentEvent" }
+format = "{created_at} REVIEW  {repo.name} #{payload.pull_request.number} comment by {actor.login}"
+color = "magenta"
+
+[[rule]]
+when = { path = "type", equals = "IssuesEvent" }
+format = "{created_at} ISSUE   {repo.name} #{payload.issue.number} {payload.action}: {payload.issue.title} by {actor.login}"
+color = "yellow"
+
+[[rule]]
+when = { path = "type", equals = "IssueCommentEvent" }
+format = "{created_at} COMMENT {repo.name} #{payload.issue.number} by {actor.login}: {payload.comment.body}"
+color = "lightyellow"
+
+[[rule]]
+when = { path = "type", equals = "CommitCommentEvent" }
+format = "{created_at} COMMENT {repo.name} on commit by {actor.login}: {payload.comment.body}"
+color = "lightyellow"
+
+[[rule]]
+when = { path = "type", equals = "WatchEvent" }
+format = "{created_at} STAR    {repo.name} by {actor.login}"
+color = "cyan"
+
+[[rule]]
+when = { path = "type", equals = "ForkEvent" }
+format = "{created_at} FORK    {repo.name} -> {payload.forkee.full_name}"
+color = "blue"
+
+# More specific rule first: repository creation has no ref to show.
+[[rule]]
+when = { path = "payload.ref_type", equals = "repository" }
+format = "{created_at} NEWREPO {repo.name} by {actor.login}"
+
+[[rule]]
+when = { path = "type", equals = "CreateEvent" }
+format = "{created_at} CREATE  {repo.name} {payload.ref_type} {payload.ref} by {actor.login}"
+
+[[rule]]
+when = { path = "type", equals = "DeleteEvent" }
+format = "{created_at} DELETE  {repo.name} {payload.ref_type} {payload.ref} by {actor.login}"
+color = "red"
+
+[[rule]]
+when = { path = "type", equals = "ReleaseEvent" }
+format = "{created_at} RELEASE {repo.name} {payload.release.tag_name} by {actor.login}"
+color = "lightmagenta"
+
+[[rule]]
+when = { path = "type", equals = "GollumEvent" }
+format = "{created_at} WIKI    {repo.name} by {actor.login}"
+
+[[rule]]
+when = { path = "type", equals = "MemberEvent" }
+format = "{created_at} MEMBER  {repo.name} {payload.action} {payload.member.login}"
+
+[[rule]]
+when = { path = "type", equals = "PublicEvent" }
+format = "{created_at} PUBLIC  {repo.name} is now public, by {actor.login}"
+
+[fallback]
+format = "{created_at} {type} {repo.name} by {actor.login}"
+color = "gray"
